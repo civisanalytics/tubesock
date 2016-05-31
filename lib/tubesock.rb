@@ -128,11 +128,19 @@ class Tubesock
   private
   def each_frame
     framebuffer = WebSocket::Frame::Incoming::Server.new(version: @version)
-    while IO.select([@socket])
-      if @socket.respond_to?(:recvfrom)
-        data, addrinfo = @socket.recvfrom(2000)
-      else
-        data, addrinfo = @socket.readpartial(2000), @socket.peeraddr
+
+    # We use this pattern to select from the socket, instead of a simple IO.select[@socket] call
+    # to support low-latency communication over OpenSSL::SSL::SSLSocket connections.  This pattern
+    # comes directly from the official IO#select docs (http://www.rubydoc.info/stdlib/core/IO#select-class_method)
+    while true
+      begin
+        data = @socket.read_nonblock(2000)
+      rescue IO::WaitReadable
+        IO.select([@socket])
+        retry
+      rescue IO::WaitWritable
+        IO.select(nil, [@socket])
+        retry
       end
       break if data.empty?
       framebuffer << data
